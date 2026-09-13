@@ -31,3 +31,4 @@ config.toml
 *.swp
 .DS_Store
 Thumbs.db
+*.ass*

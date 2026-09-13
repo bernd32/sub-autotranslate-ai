@@ -135,9 +135,19 @@ class Translator:
 
         try:
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice.get("message") or {}
+            content = message.get("content")
         except (ValueError, KeyError, IndexError) as exc:
             raise TranslationError(f"malformed API response: {exc}") from exc
+
+        if not isinstance(content, str) or not content.strip():
+            # Some models return null content (e.g. reasoning-only output or a
+            # provider-side refusal); treat it as a retryable translation error.
+            finish_reason = choice.get("finish_reason", "?")
+            raise TranslationError(
+                f"empty response content (finish_reason={finish_reason})"
+            )
 
         self.stats.requests += 1
         usage = data.get("usage") or {}
