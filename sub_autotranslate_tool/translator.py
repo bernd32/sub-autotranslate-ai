@@ -122,6 +122,10 @@ class Translator:
             "messages": [{"role": "user", "content": user_content}],
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
+            # OpenRouter unified reasoning control: explicitly disable
+            # reasoning unless enabled in the config. Some reasoning models
+            # (e.g. DeepSeek) return null content otherwise.
+            "reasoning": {"enabled": self.config.enable_reasoning},
         }
 
         try:

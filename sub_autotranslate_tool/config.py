@@ -45,6 +45,12 @@ batch_size = 40
 # Sampling temperature (lower = more deterministic)
 temperature = 0.3
 
+# Reasoning (thinking) mode for reasoning-capable models (e.g. DeepSeek).
+# Disabled by default: it wastes tokens and some reasoning models return
+# null content unless explicitly disabled (see OpenRouter reasoning docs).
+# Set to true if you deliberately want reasoning enabled.
+enable_reasoning = false
+
 # Maximum tokens in a single LLM response
 max_tokens = 8192
 
@@ -97,6 +103,7 @@ class Config:
     output_suffix: str = "ru"
     batch_size: int = 40
     temperature: float = 0.3
+    enable_reasoning: bool = False
     max_tokens: int = 8192
     max_retries: int = 4
     retry_delay: float = 2.0
