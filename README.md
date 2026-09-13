@@ -21,10 +21,53 @@ lines — so one malformed response never loses a subtitle.
 
 ## Installation
 
+### System-wide (recommended): pipx
+
+[pipx](https://pipx.pypa.io/) installs CLI tools into isolated virtual
+environments while making the command available globally — exactly what's
+needed here:
+
 ```bash
-pip install .
-# or, for development:
-pip install -e .
+# install pipx itself once (Debian/Ubuntu: sudo apt install pipx)
+# or: python3 -m pip install --user pipx && python3 -m pipx ensurepath
+
+cd /path/to/sub-autotranslate-ai
+pipx install .
+```
+
+`sub-autotranslate-tool` is now on your `PATH` (usually via
+`~/.local/bin`) and works from any directory:
+
+```bash
+sub-autotranslate-tool --version
+```
+
+Upgrade after pulling new code:
+
+```bash
+pipx reinstall sub-autotranslate-tool
+```
+
+Uninstall:
+
+```bash
+pipx uninstall sub-autotranslate-tool
+```
+
+### Alternative: pip --user
+
+```bash
+python3 -m pip install --user .
+```
+
+This installs into `~/.local`; ensure `~/.local/bin` is on your `PATH`.
+
+### Development install (venv)
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/sub-autotranslate-tool --help
 ```
 
 ## Configuration
@@ -98,12 +141,48 @@ sub-autotranslate-tool movie.srt --model anthropic/claude-sonnet-4 \
 sub-autotranslate-tool movie.srt --proxy http://127.0.0.1:8080
 ```
 
+## Extracting subtitles from MKV: `mkv-sub-extract`
+
+The package ships a companion tool that extracts subtitle streams from MKV
+files using **ffmpeg/ffprobe** (must be installed: `sudo apt install ffmpeg`).
+
+It takes a directory, probes the **first** mkv to detect subtitle tracks
+(SRT and ASS/SSA are supported), and extracts the chosen stream from every
+mkv in the directory:
+
+```bash
+# List subtitle streams of the first mkv in the directory
+mkv-sub-extract /path/to/mkv --list
+# Subtitle streams in movie.mkv:
+#   0:s:0  codec=subrip  (English)
+#   0:s:1  codec=ass     (Русские)
+
+# Extract the first subtitle stream (default, equals ffmpeg -map 0:s:0)
+mkv-sub-extract /path/to/mkv
+
+# Extract a specific stream (equals ffmpeg -map 0:s:1)
+mkv-sub-extract /path/to/mkv --stream 1
+
+# Custom output directory
+mkv-sub-extract /path/to/mkv -o ./subtitles
+```
+
+The output extension is chosen by the codec of the selected stream
+(`subrip` → `.srt`, `ass`/`ssa` → `.ass`), so extracted files can be fed
+directly to `sub-autotranslate-tool`:
+
+```bash
+mkv-sub-extract ./videos -o ./subs
+sub-autotranslate-tool ./subs -o ./subs-ru
+```
+
 ## Project layout
 
 ```
 sub_autotranslate_tool/
-├── cli.py          # argument parsing, file discovery, orchestration
+├── cli.py          # sub-autotranslate-tool: argument parsing, orchestration
 ├── config.py       # TOML config loading/creation
 ├── subtitles.py    # SRT and ASS/SSA parsing & re-rendering
-└── translator.py   # OpenRouter client, batching, retries, response parsing
+├── translator.py   # OpenRouter client, batching, retries, response parsing
+└── mkvextract.py   # mkv-sub-extract: ffmpeg-based subtitle extraction from MKV
 ```

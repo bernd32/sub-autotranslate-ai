@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 sub-autotranslate-tool = "sub_autotranslate_tool.cli:main"
+mkv-sub-extract = "sub_autotranslate_tool.mkvextract:main"
 
 [tool.setuptools.packages.find]
 include = ["sub_autotranslate_tool*"]
