@@ -188,9 +188,15 @@ def main(argv: list[str] | None = None) -> int:
             break
 
     stats = translator.stats
+    cost_line = (
+        f" Total cost: ${stats.cost:.4f} (USD)."
+        if stats.cost > 0
+        else " Total cost: unavailable (provider did not report usage.cost)."
+    )
     print(
         f"\nDone. API requests: {stats.requests}, "
         f"tokens: {stats.prompt_tokens} in / {stats.completion_tokens} out."
+        + cost_line
     )
     if failures:
         print("Failed files:", file=sys.stderr)

@@ -34,6 +34,7 @@ class UsageStats:
     requests: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cost: float = 0.0  # USD, taken from OpenRouter's usage.cost field
 
 
 class Translator:
@@ -166,6 +167,9 @@ class Translator:
         usage = data.get("usage") or {}
         self.stats.prompt_tokens += usage.get("prompt_tokens", 0)
         self.stats.completion_tokens += usage.get("completion_tokens", 0)
+        cost = usage.get("cost")
+        if isinstance(cost, (int, float)):
+            self.stats.cost += float(cost)
         logger.debug("LLM response usage: %s", usage)
         logger.debug("LLM response content:\n%s", content)
 
