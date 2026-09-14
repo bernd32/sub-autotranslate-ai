@@ -139,7 +139,13 @@ def build_parser() -> argparse.ArgumentParser:
             "using ffmpeg."
         ),
     )
-    p.add_argument("directory", nargs="?", type=Path, help="Directory with .mkv files.")
+    p.add_argument(
+        "directory",
+        nargs="?",
+        type=Path,
+        metavar="INPUT",
+        help="A .mkv file or a directory containing .mkv files.",
+    )
     p.add_argument(
         "-o",
         "--output-dir",
@@ -170,11 +176,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _require_tools()
 
-        files = sorted(
-            f for f in args.directory.glob("*.mkv") if f.is_file()
-        )
-        if not files:
-            raise MkvExtractError(f"no .mkv files found in {args.directory}")
+        src = args.directory
+        if src.is_file():
+            if src.suffix.lower() != ".mkv":
+                raise MkvExtractError(f"not an .mkv file: {src}")
+            files = [src]
+            default_out_dir = src.parent
+        elif src.is_dir():
+            files = sorted(f for f in src.glob("*.mkv") if f.is_file())
+            if not files:
+                raise MkvExtractError(f"no .mkv files found in {src}")
+            default_out_dir = src
+        else:
+            raise MkvExtractError(f"input not found: {src}")
 
         first_streams = probe_subtitle_streams(files[0])
         if args.list:
@@ -183,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         ext = detect_extension(first_streams, args.stream)
-        out_dir = args.output_dir or args.directory
+        out_dir = args.output_dir or default_out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
 
     except MkvExtractError as exc:
