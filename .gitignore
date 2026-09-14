@@ -33,3 +33,4 @@ config.toml
 Thumbs.db
 *.ass*
 test_files/
+pi-session-*
