@@ -4,7 +4,7 @@ A Linux CLI tool for high-quality, context-aware AI translation of **SRT** and
 **ASS/SSA** subtitle files using LLMs via [OpenRouter](https://openrouter.ai).
 
 Default translation pair: **English → Russian**
-Default model: `google/gemini-3.8-flash`
+Default model: `deepseek/deepseek-v4.1-flash`
 
 ## How it works
 
@@ -82,7 +82,7 @@ Default location: `~/.config/sub-autotranslate-tool/config.toml`
 
 ```toml
 api_key = ""                          # or use the OPENROUTER_API_KEY env var
-model = "google/gemini-3.8-flash"     # any model id from openrouter.ai/models
+model = "deepseek/deepseek-v4.1-flash"  # any model id from openrouter.ai/models
 source_language = "English"
 target_language = "Russian"
 output_suffix = "ru"                  # movie.srt -> movie.ru.srt

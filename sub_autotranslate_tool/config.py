@@ -28,7 +28,7 @@ DEFAULT_CONFIG_TEMPLATE = '''\
 api_key = ""
 
 # LLM model to use for translation (any model id from https://openrouter.ai/models)
-model = "google/gemini-3.8-flash"
+model = "deepseek/deepseek-v4.1-flash"
 
 # Translation language pair
 source_language = "English"
@@ -102,7 +102,7 @@ Rules:
 @dataclass
 class Config:
     api_key: str = ""
-    model: str = "google/gemini-3.8-flash"
+    model: str = "deepseek/deepseek-v4.1-flash"
     source_language: str = "English"
     target_language: str = "Russian"
     output_suffix: str = "ru"
