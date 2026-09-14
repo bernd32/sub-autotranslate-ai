@@ -32,3 +32,4 @@ config.toml
 .DS_Store
 Thumbs.db
 *.ass*
+test_files/

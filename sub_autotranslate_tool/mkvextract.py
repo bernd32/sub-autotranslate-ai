@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from .log import LEVELS, setup_logging
+
+logger = logging.getLogger(__name__)
 
 # ffmpeg codec name -> output extension
 _CODEC_EXT = {
@@ -62,10 +67,12 @@ def probe_subtitle_streams(path: Path) -> list[SubtitleStream]:
         "-of", "json",
         str(path),
     ]
+    logger.debug("running: %s", " ".join(cmd))
     try:
         result = subprocess.run(cmd, capture_output=True, check=True, text=True)
     except subprocess.CalledProcessError as exc:
         raise MkvExtractError(f"ffprobe failed for {path}: {exc.stderr.strip()}") from exc
+    logger.debug("ffprobe output: %s", result.stdout.strip())
 
     try:
         streams = json.loads(result.stdout).get("streams", [])
@@ -122,6 +129,7 @@ def extract_one(src: Path, out_dir: Path, stream_index: int, ext: str) -> Path:
         "-map", f"0:s:{stream_index}",
         str(dst),
     ]
+    logger.debug("running: %s", " ".join(cmd))
     try:
         subprocess.run(cmd, capture_output=True, check=True, text=True)
     except subprocess.CalledProcessError as exc:
@@ -165,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="List subtitle streams of the first mkv file and exit.",
     )
+    p.add_argument(
+        "--log-level",
+        choices=LEVELS,
+        default="info",
+        help="Log level (default: info). Use 'debug' to see ffmpeg/ffprobe commands.",
+    )
     return p
 
 
@@ -172,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.directory is None:
         build_parser().error("the following arguments are required: directory")
+
+    setup_logging(args.log_level)
 
     try:
         _require_tools()
@@ -214,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {src.name} -> {dst.name}")
         except MkvExtractError as exc:
             failures += 1
+            logger.error("%s: %s", src.name, exc)
             print(f"  !! {src.name}: {exc}", file=sys.stderr)
 
     if failures:

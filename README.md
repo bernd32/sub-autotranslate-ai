@@ -92,6 +92,7 @@ max_tokens = 8192
 max_retries = 4
 retry_delay = 2.0
 proxy = ""                            # e.g. "http://127.0.0.1:8080" or "socks5://127.0.0.1:1080"
+log_level = "info"                    # debug / info / warning / error / critical
 prompt = """..."""                    # fully customizable translation prompt
 ```
 
@@ -140,6 +141,24 @@ sub-autotranslate-tool movie.srt --model anthropic/claude-sonnet-4 \
 # Route requests through a proxy
 sub-autotranslate-tool movie.srt --proxy http://127.0.0.1:8080
 ```
+
+## Logging
+
+The tool logs to stderr with configurable levels
+(`debug` / `info` / `warning` / `error` / `critical`), set via
+`log_level` in the config file or the `--log-level` CLI flag (both tools).
+
+- **`info`** (default) — high-level progress: files, model, configuration.
+- **`debug`** — full diagnostics, including the **exact text sent to the LLM**
+  (prompt + numbered subtitle lines) and the **raw model response** plus
+  per-request token usage. Use this to verify the prompt behaves correctly
+  and no extra content is wasting tokens:
+  ```bash
+  sub-autotranslate-tool movie.srt --log-level debug 2>debug.log
+  ```
+- **`warning`** — retries, malformed LLM responses, batches that had to be split.
+- **`error`** — per-file failures that don't abort the run.
+- **`critical`** — unrecoverable errors (e.g. missing API key).
 
 ## Extracting subtitles from MKV: `mkv-sub-extract`
 

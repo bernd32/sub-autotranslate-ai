@@ -68,6 +68,11 @@ retry_delay = 2.0
 # environment variables are also honored automatically.
 proxy = ""
 
+# Log level: debug / info / warning / error / critical
+# Use "debug" to log the exact text sent to and received from the LLM
+# (useful to verify prompt behavior and token usage).
+log_level = "info"
+
 # The prompt template sent to the model for every batch.
 # Available placeholders:
 #   {source_language}  - source language name
@@ -108,6 +113,7 @@ class Config:
     max_retries: int = 4
     retry_delay: float = 2.0
     proxy: str = ""
+    log_level: str = "info"
     prompt: str = ""
 
     def effective_api_key(self, cli_key: str | None = None) -> str:

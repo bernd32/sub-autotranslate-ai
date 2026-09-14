@@ -10,6 +10,7 @@ lines so one malformed response never loses a subtitle.
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 import time
@@ -20,6 +21,8 @@ import requests
 from .config import Config
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+logger = logging.getLogger(__name__)
 
 
 class TranslationError(RuntimeError):
@@ -93,9 +96,8 @@ class Translator:
                     return self._translate_batch(chunk)
                 except TranslationError as exc:
                     self._wait(attempt, str(exc))
-            print(
-                "\nWarning: giving up on a line; keeping original text.",
-                file=sys.stderr,
+            logger.warning(
+                "giving up on a line; keeping original text: %r", chunk[0][:80]
             )
             return list(chunk)
 
@@ -107,16 +109,23 @@ class Translator:
 
         # Persistent failure: split the batch and translate halves separately.
         mid = len(chunk) // 2
-        print(
-            f"\nWarning: batch of {len(chunk)} failed repeatedly; "
-            f"splitting into smaller batches.",
-            file=sys.stderr,
+        logger.warning(
+            "batch of %d failed repeatedly; splitting into smaller batches",
+            len(chunk),
         )
         return self._translate_chunk(chunk[:mid]) + self._translate_chunk(chunk[mid:])
 
     def _translate_batch(self, lines: list[str]) -> list[str]:
         """One API round-trip for a batch of lines."""
         user_content = self._build_user_message(lines)
+        # The exact text sent to the LLM: inspect prompt behavior and
+        # make sure no extra content is wasting tokens.
+        logger.debug(
+            "LLM request (model=%s, %d lines):\n%s",
+            self.config.model,
+            len(lines),
+            user_content,
+        )
         payload = {
             "model": self.config.model,
             "messages": [{"role": "user", "content": user_content}],
@@ -157,9 +166,15 @@ class Translator:
         usage = data.get("usage") or {}
         self.stats.prompt_tokens += usage.get("prompt_tokens", 0)
         self.stats.completion_tokens += usage.get("completion_tokens", 0)
+        logger.debug("LLM response usage: %s", usage)
+        logger.debug("LLM response content:\n%s", content)
 
         parsed = parse_numbered_response(content, len(lines))
         if parsed is None:
+            logger.warning(
+                "could not parse %d numbered items from the LLM response",
+                len(lines),
+            )
             raise TranslationError(
                 f"could not parse {len(lines)} numbered items from the response"
             )
@@ -178,10 +193,12 @@ class Translator:
         if attempt >= self.config.max_retries:
             return
         delay = self.config.retry_delay * (2**attempt)
-        print(
-            f"\nRetry {attempt + 1}/{self.config.max_retries} "
-            f"in {delay:.0f}s ({reason})",
-            file=sys.stderr,
+        logger.warning(
+            "retry %d/%d in %.0fs (%s)",
+            attempt + 1,
+            self.config.max_retries,
+            delay,
+            reason,
         )
         time.sleep(delay)
 

@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG_PATH, Config, ensure_default_config, load_config
+from .log import LEVELS, setup_logging
 from .subtitles import SUPPORTED_EXTENSIONS, SubtitleFormatError, load_subtitles
 from .translator import Translator
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +53,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--proxy",
         default=None,
         help="Proxy for API requests, e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:1080.",
+    )
+    p.add_argument(
+        "--log-level",
+        choices=LEVELS,
+        default=None,
+        help=(
+            "Log level (default: from config, 'info'). Use 'debug' to log the "
+            "exact text sent to and received from the LLM."
+        ),
     )
     p.add_argument(
         "--init-config",
@@ -126,8 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.proxy:
         config.proxy = args.proxy
 
+    setup_logging(args.log_level or config.log_level)
+    logger.debug("configuration: %s", config)
+
     api_key = config.effective_api_key(args.api_key)
     if not api_key:
+        logger.critical("no OpenRouter API key configured")
         raise SystemExit(
             "error: no OpenRouter API key.\n"
             "Set OPENROUTER_API_KEY, pass --api-key, or set api_key in "
@@ -136,6 +153,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- input/output ---
     files = collect_input_files(args.input)
+    logger.info(
+        "translating %d file(s) with model %s (%s -> %s)",
+        len(files),
+        config.model,
+        config.source_language,
+        config.target_language,
+    )
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             translate_file(src, dst, translator, config)
         except SubtitleFormatError as exc:
             failures.append((src, str(exc)))
+            logger.error("skipping %s: %s", src.name, exc)
             print(f"  !! skipped: {exc}", file=sys.stderr)
         except KeyboardInterrupt:
             print("\nInterrupted.", file=sys.stderr)
