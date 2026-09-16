@@ -19,9 +19,17 @@ from pathlib import Path
 
 @dataclass
 class Segment:
-    """One translatable unit of subtitle text (may contain line breaks)."""
+    """One translatable unit of subtitle text (may contain line breaks).
+
+    `style` and `speaker` come from the ASS Style/Name fields and are empty
+    for SRT. They are metadata for the translator, not content: the speaker
+    decides grammatical gender in many target languages, and the style tells
+    a shop sign apart from spoken dialogue.
+    """
 
     text: str
+    style: str = ""
+    speaker: str = ""
 
 
 class SubtitleDocument:
@@ -127,14 +135,32 @@ class SrtDocument(SubtitleDocument):
 # ---------------------------------------------------------------------------
 
 _ASS_DIALOGUE_RE = re.compile(r"^\s*Dialogue\s*:", re.IGNORECASE)
+_ASS_FORMAT_RE = re.compile(r"^\s*Format\s*:", re.IGNORECASE)
+
+# Field layout of [Events] used when the section has no Format line.
+_DEFAULT_EVENT_FORMAT = [
+    "Layer", "Start", "End", "Style", "Name",
+    "MarginL", "MarginR", "MarginV", "Effect", "Text",
+]
+
+
+@dataclass
+class _AssEvent:
+    """Where a segment lives in the file and how its line is laid out."""
+
+    line_idx: int
+    seg_idx: int
+    field_count: int
+    text_idx: int
 
 
 class AssDocument(SubtitleDocument):
     """ASS/SSA file; only the Text field of Dialogue events is translated.
 
-    The text field is the 10th comma-separated value and may itself contain
-    commas, so the line is split with maxsplit=9. Override tags ({\\...})
-    and \\N/\\h markers are left in place for the LLM to preserve.
+    Field positions are taken from the ``Format:`` line of the [Events]
+    section rather than assumed, because SSA v4.00 and ASS v4.00+ differ
+    (SSA has a leading ``Marked`` field). Text is the last field and may
+    contain commas, so the split is bounded by the field count.
     """
 
     def __init__(self, text: str) -> None:
@@ -142,36 +168,72 @@ class AssDocument(SubtitleDocument):
         self.lines: list[str] = text.replace("\r\n", "\n").replace("\r", "\n").split(
             "\n"
         )
-        # dialogue line index -> segment index
-        self._dialogue_map: dict[int, int] = {}
+        self._events: list[_AssEvent] = []
         self._parse()
 
     def _parse(self) -> None:
         in_events = False
+        fields = list(_DEFAULT_EVENT_FORMAT)
         for i, line in enumerate(self.lines):
             stripped = line.strip()
             if stripped.startswith("[") and stripped.endswith("]"):
                 in_events = stripped.lower() == "[events]"
+                fields = list(_DEFAULT_EVENT_FORMAT)
                 continue
-            if in_events and _ASS_DIALOGUE_RE.match(line):
+            if not in_events:
+                continue
+            if _ASS_FORMAT_RE.match(line):
                 _, _, rest = line.partition(":")
-                parts = rest.split(",", 9)
-                if len(parts) < 10:
-                    continue
-                self._dialogue_map[i] = len(self.segments)
-                self.segments.append(Segment(parts[9]))
+                declared = [f.strip() for f in rest.split(",")]
+                if any(f.lower() == "text" for f in declared):
+                    fields = declared
+                continue
+            if not _ASS_DIALOGUE_RE.match(line):
+                continue
+
+            text_idx = next(
+                i for i, f in enumerate(fields) if f.lower() == "text"
+            )
+            _, _, rest = line.partition(":")
+            parts = rest.split(",", len(fields) - 1)
+            if len(parts) <= text_idx:
+                continue
+
+            self._events.append(
+                _AssEvent(
+                    line_idx=i,
+                    seg_idx=len(self.segments),
+                    field_count=len(fields),
+                    text_idx=text_idx,
+                )
+            )
+            self.segments.append(
+                Segment(
+                    text=parts[text_idx],
+                    style=_field(parts, fields, "style"),
+                    speaker=_field(parts, fields, "name"),
+                )
+            )
 
         if not self.segments:
             raise SubtitleFormatError("No Dialogue events found in [Events] section")
 
     def render(self) -> str:
         lines = list(self.lines)
-        for line_idx, seg_idx in self._dialogue_map.items():
-            head, _, rest = lines[line_idx].partition(":")
-            parts = rest.split(",", 9)
-            parts[9] = self.segments[seg_idx].text
-            lines[line_idx] = f"{head}:{','.join(parts)}"
+        for event in self._events:
+            head, _, rest = lines[event.line_idx].partition(":")
+            parts = rest.split(",", event.field_count - 1)
+            parts[event.text_idx] = self.segments[event.seg_idx].text
+            lines[event.line_idx] = f"{head}:{','.join(parts)}"
         return "\n".join(lines)
+
+
+def _field(parts: list[str], fields: list[str], name: str) -> str:
+    """Value of the named Format field, or "" if this file has no such field."""
+    for i, field_name in enumerate(fields):
+        if field_name.lower() == name and i < len(parts):
+            return parts[i].strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------

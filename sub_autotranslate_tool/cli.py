@@ -8,12 +8,22 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .cache import DEFAULT_CACHE_PATH, NullCache, TranslationCache
 from .config import DEFAULT_CONFIG_PATH, Config, ensure_default_config, load_config
+from .glossary import Glossary
 from .log import LEVELS, setup_logging
-from .subtitles import SUPPORTED_EXTENSIONS, SubtitleFormatError, load_subtitles
+from .subtitles import (
+    SUPPORTED_EXTENSIONS,
+    SubtitleDocument,
+    SubtitleFormatError,
+    load_subtitles,
+)
 from .translator import Translator
 
 logger = logging.getLogger(__name__)
+
+# Series notes picked up automatically from the input directory.
+CONTEXT_FILENAMES = (".subctx.txt", "series.txt")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +63,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--proxy",
         default=None,
         help="Proxy for API requests, e.g. http://127.0.0.1:8080 or socks5://127.0.0.1:1080.",
+    )
+    p.add_argument(
+        "--context",
+        type=Path,
+        default=None,
+        help=(
+            "Text file with notes about the series (synopsis, characters and "
+            "their gender, how they address each other). Pinned into every "
+            "request. Picked up automatically from "
+            f"{' or '.join(CONTEXT_FILENAMES)} next to the input."
+        ),
+    )
+    p.add_argument(
+        "--glossary",
+        type=Path,
+        default=None,
+        help=(
+            "TOML glossary of names/terms. Loaded if it exists, otherwise "
+            "generated and written there for reuse across a season."
+        ),
+    )
+    p.add_argument(
+        "--refresh-glossary",
+        action="store_true",
+        help="Rebuild the glossary even if the --glossary file already exists.",
+    )
+    p.add_argument(
+        "--no-glossary",
+        action="store_true",
+        help="Skip the glossary pre-pass entirely.",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Do not read or write the on-disk translation memory.",
+    )
+    p.add_argument(
+        "--cache-clear",
+        action="store_true",
+        help=f"Delete all cached translations ({DEFAULT_CACHE_PATH}), then exit.",
     )
     p.add_argument(
         "--log-level",
@@ -98,18 +148,61 @@ def output_path_for(src: Path, output_dir: Path | None, suffix: str) -> Path:
     return out_dir / name
 
 
-def translate_file(
-    src: Path, dst: Path, translator: Translator, config: Config
+def translate_document(
+    doc: SubtitleDocument, src: Path, dst: Path, translator: Translator
 ) -> None:
-    doc = load_subtitles(src)
-    label = f"{src.name}: "
-    texts = [seg.text for seg in doc.segments]
-    translated = translator.translate_all(texts, progress_label=label)
+    translated = translator.translate_segments(
+        doc.segments, progress_label=f"{src.name}: "
+    )
     for seg, new_text in zip(doc.segments, translated):
         seg.text = new_text
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(doc.render(), encoding="utf-8")
     print(f"  -> {dst}")
+
+
+def find_context_file(input_path: Path, explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        if not explicit.is_file():
+            raise SystemExit(f"error: context file not found: {explicit}")
+        return explicit
+    base = input_path if input_path.is_dir() else input_path.parent
+    for name in CONTEXT_FILENAMES:
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def resolve_glossary(args: argparse.Namespace, translator: Translator, docs) -> Glossary:
+    """Load the glossary from disk, or build it once for the whole run."""
+    if args.no_glossary:
+        return Glossary()
+
+    path: Path | None = args.glossary
+    if path is not None and path.is_file() and not args.refresh_glossary:
+        try:
+            glossary = Glossary.load(path)
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"error: cannot read glossary {path}: {exc}") from exc
+        print(f"Glossary: {len(glossary.terms)} term(s) from {path}")
+        return glossary
+
+    if not translator.config.glossary_auto and path is None:
+        return Glossary()
+
+    # One pre-pass over every input file, so a season shares one glossary.
+    all_segments = [seg for doc in docs for seg in doc.segments]
+    glossary = translator.build_glossary(all_segments)
+    if glossary and path is not None:
+        try:
+            glossary.save(path)
+            print(f"Glossary: {len(glossary.terms)} term(s) written to {path}")
+        except OSError as exc:
+            logger.warning("could not write glossary to %s: %s", path, exc)
+    elif glossary:
+        print(f"Glossary: {len(glossary.terms)} term(s) (pass --glossary to keep it)")
+    return glossary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -119,6 +212,13 @@ def main(argv: list[str] | None = None) -> int:
         path = ensure_default_config(args.config or DEFAULT_CONFIG_PATH)
         print(f"Config file: {path}")
         print("Edit it to set your API key, model, languages and prompt.")
+        return 0
+
+    if args.cache_clear:
+        cache = TranslationCache()
+        removed = cache.clear()
+        cache.close()
+        print(f"Removed {removed} cached translation(s) from {cache.path}")
         return 0
 
     if args.input is None:
@@ -167,43 +267,104 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Translation: {config.source_language} -> {config.target_language}")
     if config.proxy:
         print(f"Proxy: {config.proxy}")
-    print(f"Files to translate: {len(files)}")
 
-    translator = Translator(config, api_key)
+    # Parsing every file up front keeps a malformed file from surfacing
+    # halfway through a paid run, and lets the glossary pre-pass see the
+    # whole season at once.
     failures: list[tuple[Path, str]] = []
-
+    parsed: list[tuple[Path, SubtitleDocument]] = []
     for src in files:
-        dst = output_path_for(src, args.output_dir, config.output_suffix)
-        if dst == src:
-            dst = src.with_name(f"{src.stem}.translated{src.suffix}")
-        print(f"Translating {src.name} ({src.suffix}) ...")
         try:
-            translate_file(src, dst, translator, config)
-        except SubtitleFormatError as exc:
+            parsed.append((src, load_subtitles(src)))
+        except (SubtitleFormatError, OSError) as exc:
             failures.append((src, str(exc)))
             logger.error("skipping %s: %s", src.name, exc)
-            print(f"  !! skipped: {exc}", file=sys.stderr)
-        except KeyboardInterrupt:
-            print("\nInterrupted.", file=sys.stderr)
-            break
+            print(f"  !! skipped {src.name}: {exc}", file=sys.stderr)
 
-    stats = translator.stats
-    cost_line = (
-        f" Total cost: ${stats.cost:.4f} (USD)."
-        if stats.cost > 0
-        else " Total cost: unavailable (provider did not report usage.cost)."
-    )
-    print(
-        f"\nDone. API requests: {stats.requests}, "
-        f"tokens: {stats.prompt_tokens} in / {stats.completion_tokens} out."
-        + cost_line
-    )
+    if not parsed:
+        print("error: no readable subtitle files", file=sys.stderr)
+        return 1
+
+    total_lines = sum(len(doc.segments) for _, doc in parsed)
+    print(f"Files to translate: {len(parsed)} ({total_lines} lines)")
+
+    context_text = ""
+    context_file = find_context_file(args.input, args.context)
+    if context_file is not None:
+        context_text = context_file.read_text(encoding="utf-8", errors="replace")
+        print(f"Series context: {context_file}")
+
+    use_cache = config.cache and not args.no_cache
+    cache = TranslationCache() if use_cache else NullCache()
+    if use_cache and cache.enabled:
+        print(f"Translation memory: {cache.count()} entries in {cache.path}")
+
+    translator = Translator(config, api_key, cache=cache, series_context=context_text)
+
+    try:
+        glossary = resolve_glossary(args, translator, [doc for _, doc in parsed])
+        if glossary:
+            translator.attach_glossary(glossary)
+
+        for src, doc in parsed:
+            dst = output_path_for(src, args.output_dir, config.output_suffix)
+            if dst == src:
+                dst = src.with_name(f"{src.stem}.translated{src.suffix}")
+            print(f"Translating {src.name} ({src.suffix}) ...")
+            try:
+                translate_document(doc, src, dst, translator)
+            except OSError as exc:
+                failures.append((src, str(exc)))
+                logger.error("could not write output for %s: %s", src.name, exc)
+                print(f"  !! failed: {exc}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+    finally:
+        cache.close()
+
+    print_report(translator)
     if failures:
         print("Failed files:", file=sys.stderr)
         for path, reason in failures:
             print(f"  {path}: {reason}", file=sys.stderr)
         return 1
     return 0
+
+
+def print_report(translator: Translator) -> None:
+    stats = translator.stats
+    print(
+        f"\nDone. API requests: {stats.requests}"
+        + (f" (+{stats.failed_requests} failed)" if stats.failed_requests else "")
+        + f", tokens: {stats.prompt_tokens} in / {stats.completion_tokens} out."
+    )
+    if stats.cost > 0:
+        print(f"Cost: ${stats.cost:.4f} (USD)")
+    else:
+        print("Cost: unavailable (provider did not report usage.cost)")
+
+    saved = stats.lines_cached + stats.lines_deduped + stats.lines_skipped
+    print(
+        f"Lines: {stats.lines_total} total, {stats.lines_sent} sent to the model"
+        + (f", {saved} not sent" if saved else "")
+    )
+    if saved:
+        print(
+            f"  not sent: {stats.lines_cached} from cache, "
+            f"{stats.lines_deduped} duplicates, "
+            f"{stats.lines_skipped} markup-only/skipped styles"
+        )
+    if stats.lines_rejected or stats.repairs:
+        print(
+            f"Quality: {stats.lines_rejected} line(s) failed validation, "
+            f"{stats.repairs} follow-up request(s) for individual lines"
+        )
+    if stats.lines_failed:
+        print(
+            f"WARNING: {stats.lines_failed} line(s) kept their source text "
+            "(see warnings above)",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

@@ -42,6 +42,48 @@ output_suffix = "ru"
 # smaller batches are more robust against formatting errors.
 batch_size = 40
 
+# Send the ASS "Name" (speaker) field along with each line. Costs a few
+# tokens per line and tells the model who is talking, which decides
+# grammatical gender and register in many target languages.
+send_speaker = true
+
+# Number of already translated lines shown as context at the start of the
+# next batch, so dialogue does not break at batch boundaries. 0 disables.
+context_overlap = 5
+
+# Translate each distinct line once and reuse the result for its duplicates
+# (repeated signs and nameplates). Saves tokens and keeps wording identical.
+# Set to false if you want every occurrence translated in its own right.
+dedup = true
+
+# Reuse translations across files and runs via an on-disk translation memory
+# (~/.cache/sub-autotranslate-tool). Opening/ending lyrics and location signs
+# repeat in every episode of a season. Entries are invalidated automatically
+# when the model, the language pair, the prompt or the glossary changes.
+cache = true
+
+# Before translating, ask the model once for canonical renderings of the
+# names and recurring terms found in all input files, then pin them into
+# every request. Costs one small extra request per run and is the main
+# defence against a character being named differently in every scene.
+glossary_auto = true
+
+# Provider prompt caching for the static instructions:
+#   "auto" - mark the prefix explicitly for models that need it (anthropic/*),
+#            rely on automatic prefix caching elsewhere
+#   "on"   - always mark the prefix (cache_control)
+#   "off"  - never mark it
+prompt_cache = "auto"
+
+# Styles that must not be translated at all (the line is copied as is).
+# Names are matched case-insensitively and accept globs, e.g. "sign*".
+skip_styles = []
+
+# Force a style to be treated as on-screen text or as song lyrics. Detection
+# from the style name usually suffices; use these for non-obvious names.
+sign_styles = []
+song_styles = []
+
 # Sampling temperature (lower = more deterministic)
 temperature = 0.3
 
@@ -73,29 +115,43 @@ proxy = ""
 # (useful to verify prompt behavior and token usage).
 log_level = "info"
 
-# The prompt template sent to the model for every batch.
+# The static instructions, sent as the system message of every request.
+# Keeping them constant across batches is what lets providers cache them,
+# so avoid putting anything batch-specific here.
 # Available placeholders:
 #   {source_language}  - source language name
 #   {target_language}  - target language name
-#   {count}            - number of lines in this batch
-# The subtitle lines themselves are appended after this prompt,
-# numbered as [1], [2], ...
-prompt = """You are a professional subtitle translator.
-Translate the following {count} subtitle lines from {source_language} to {target_language}.
+#   {glossary}         - the glossary block (empty when there is none)
+#   {context}          - the --context series notes (empty when not given)
+# The subtitle lines are sent separately, numbered as [1], [2], ...
+prompt = """You are a professional subtitle translator for animated series.
+Translate from {source_language} to {target_language}.
 
-Rules:
-- Use the surrounding lines as context so the translation reads naturally and
-  consistently (characters, tone, register, jokes, idioms).
-- Do NOT translate literally word-by-word; produce fluent, natural {target_language}
-  as a native speaker would write it for film/TV subtitles.
-- Keep each numbered item a single subtitle: preserve internal line breaks inside an item.
-- Keep the numbering intact: answer with exactly {count} items, numbered [1]..[{count}],
-  one item per number, nothing else (no comments, no explanations).
-- Preserve any markup such as HTML-like tags (<i>, </i>), ASS override tags
-  ({{\\\\i1}}, {{\\\\pos(...)}} etc.) and line-break markers (\\\\N, \\\\h) exactly.
-- Do not translate proper names phonetically unless that is the established
-  convention in {target_language}; keep numbers, and punctuation style appropriate
-  for {target_language}."""
+Input format: one subtitle per line, as "[N] text". The text may be preceded
+by a marker in angle brackets:
+  <Name>  - the character speaking the line
+  <sign>  - on-screen text (signboard, caption, letter), not speech
+  <song>  - song lyrics
+Markers are information for you, never content: do not translate or repeat them.
+
+Answer format: exactly one line per item, as "[N] translation", same numbers,
+same order, nothing else. No comments, no notes, no blank lines, and never
+repeat the source text.
+
+Translation rules:
+- Translate meaning, not words: write fluent {target_language} the way a native
+  subtitle translator would, keeping register, tone and humour.
+- Use the surrounding lines as context; keep names and terminology consistent.
+- <sign> items are on-screen text: keep them short and label-like, with no
+  added words and no sentence-final period.
+- <song> items are lyrics: keep the imagery consistent across adjacent lines.
+- Keep the markers \\\\N (line break) and \\\\h (hard space) exactly as they appear,
+  in the same number and the same places.
+- Copy every <0/>, <1/> marker unchanged and in place: each stands for styling
+  that was removed before translation.
+- Keep inline tags such as <i> and </i> around the same words.
+- Use punctuation and quotation marks native to {target_language}; keep numbers.
+- Never merge two items, never split one, never add or drop an item.{glossary}{context}"""
 '''
 
 
@@ -107,6 +163,15 @@ class Config:
     target_language: str = "Russian"
     output_suffix: str = "ru"
     batch_size: int = 40
+    send_speaker: bool = True
+    context_overlap: int = 5
+    dedup: bool = True
+    cache: bool = True
+    glossary_auto: bool = True
+    prompt_cache: str = "auto"
+    skip_styles: list[str] = field(default_factory=list)
+    sign_styles: list[str] = field(default_factory=list)
+    song_styles: list[str] = field(default_factory=list)
     temperature: float = 0.3
     enable_reasoning: bool = False
     max_tokens: int = 8192

@@ -34,3 +34,5 @@ Thumbs.db
 *.ass*
 test_files/
 pi-session-*
+AGENTS.md
+changes.txt
